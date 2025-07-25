@@ -30,3 +30,4 @@ if submit:
     st.write("Here is the data you entered:")
 
     st.json(form_value)  # nicely shows the whole dictionary as JSON
+#0,,2,4,5,7,9,11,12 ||| 0,0,2,0,5,4
