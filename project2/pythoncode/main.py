@@ -1,4 +1,3 @@
-# main.py
 import asyncio
 import numpy as np
 import sounddevice as sd
@@ -6,7 +5,7 @@ import speech_recognition as sr
 import os
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
-from graph import graph
+from graph import graph  # ✅ keep this, remove streamlit
 
 load_dotenv()
 
@@ -20,8 +19,7 @@ print("✅ API key loaded successfully")
 messages = []
 openai = AsyncOpenAI(api_key=api_key)  # Ensure API key is passed
 
-# List of supported voices
-VOICE_NAME = "shimmer"  # alloy, shimmer, echo, fable, onyx, nova
+VOICE_NAME = "shimmer"
 
 async def tts(text: str):
     try:
@@ -59,6 +57,13 @@ async def main():
             user_input = r.recognize_google(audio)
             print("🗣️ You said:", user_input)
 
+            # 👋 Voice-based exit trigger
+            exit_phrases = ["band kar do", "exit", "bye", "goodbye", "luna stop", "stop now", "fuck you"]
+            if any(phrase in user_input.lower() for phrase in exit_phrases):
+                print("👋 Exiting as per your command...")
+                await tts("Aww, okay baby! Talk to you later 💖 Byeee!")
+                exit()
+
         except sr.WaitTimeoutError:
             print("⏱️ You didn’t say anything in time.")
             return
@@ -69,15 +74,33 @@ async def main():
             print("❌ Could not request results:", e)
             return
 
+    # ✅ Fix: Use user_input here
     messages.append({"role": "user", "content": user_input})
     print("🧠 Thinking...")
 
+    # ✅ Fix: This loop should be inside main()
+    print("📦 Graph type check:", type(graph))
+
     for event in graph.stream({"messages": messages}, stream_mode="values"):
         if "messages" in event:
+            if not event["messages"]:
+                print("⚠️ No messages returned in event — skipping.")
+                continue
+
             ai_message = event["messages"][-1]
-            print("💬 AI:", ai_message["content"])
-            messages.append({"role": "assistant", "content": ai_message["content"]})
-            await tts(ai_message["content"])
+
+            # ✅ FIXED: safer way to get content
+            content = getattr(ai_message, "content", "").strip()
+
+            if content:
+                print("💬 AI:", content)
+                messages.append({"role": "assistant", "content": content})
+                await tts(content)
+            else:
+                print("⚠️ Empty AI response — skipping TTS")
+        else:
+            print("⚠️ Event without 'messages':", event)
+
 
 if __name__ == "__main__":
     try:

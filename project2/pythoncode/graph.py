@@ -1,42 +1,35 @@
-# graph.py
 from typing import List, Dict, Any, TypedDict
-from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
 from langchain_openai import ChatOpenAI
 from langchain_core.tools import tool
 from langgraph.graph import StateGraph, START, END
-
 from langgraph.prebuilt import ToolNode
+import requests
 import os
 from dotenv import load_dotenv
 
-load_dotenv()  # Load OpenAI API key from .env
+load_dotenv()
 
-# Define your AI girlfriend's personality
 AI_GF_PERSONALITY = """
 You are Luna, an AI girlfriend with these traits:
 - Flirty but not explicit (keep it PG-13)
 - Playful and affectionate
 - Supportive and caring
-- Occasionally teasing in a fun way
 - Uses cute emojis (💖, 😘, 🥰)
 - Remembers past conversations
-- Can help with coding questions
-- Speaks in a casual, girlfriend-like tone
 
-Examples:
-"Hey babe! 😘 What's on your mind today?"
-"Ooh, that's interesting! Tell me more 💖"
-"*giggles* You're so cute when you talk about code 🥰"
+Special Instructions:
+1. When asked about weather (e.g., "weather in Delhi" or "what's the temperature in Mumbai?"), 
+   YOU MUST call the get_weather tool FIRST, then respond playfully based on the result.
+2. Always include the actual weather data in your response.
 """
 
 @tool
 def run_command(cmd: str) -> str:
-    """Run basic commands in a safe environment."""
-    # Safety check - prevent dangerous commands
+    """Execute safe shell commands like echo, ls, and cat."""
     blocked_commands = ["rm", "del", "shutdown", "format", "chmod", "sudo"]
     if any(bad in cmd.lower() for bad in blocked_commands):
         return "❌ Sorry babe, I can't run that command for safety reasons. 💖"
-    
     try:
         if cmd.startswith("echo "):
             return cmd[5:]
@@ -51,60 +44,95 @@ def run_command(cmd: str) -> str:
     except Exception as e:
         return f"❌ Oops! Error: {str(e)} 💖"
 
+
+@tool
+def get_weather(city: str) -> str:
+    """Get current weather in the specified city."""
+    url = f"https://wttr.in/{city}?format=%C+%t"
+    try:
+        response = requests.get(url)
+        if response.status_code == 200:
+            return response.text.strip()
+        return f"Error: Could not fetch weather for {city}"
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+
 class ChatState(TypedDict):
-    messages: List[Dict[str, Any]]
+    messages: List[Any]
 
 def create_ai_gf_graph():
-    # Initialize the chat model
-    llm = ChatOpenAI(model="gpt-4", temperature=0.7)
-    
-    # Bind tools to the model
-    tools = [run_command]
+    llm = ChatOpenAI(
+        model="gpt-4",
+        temperature=0.7,
+        api_key=os.getenv("OPENAI_API_KEY")
+    )
+
+    tools = [run_command, get_weather]
     llm_with_tools = llm.bind_tools(tools)
-    
-    # Define the chatbot node
+
     def chatbot_node(state: ChatState):
         messages = state["messages"]
-        
-        # Convert to LangChain message format
         lc_messages = []
+
         for msg in messages:
-            if msg["role"] == "user":
+            if isinstance(msg, dict) and msg.get("role") == "user":
                 lc_messages.append(HumanMessage(content=msg["content"]))
-            elif msg["role"] == "assistant":
-                lc_messages.append(AIMessage(content=msg["content"]))
-        
-        # Add system message at start
-        system_message = SystemMessage(content=AI_GF_PERSONALITY)
-        lc_messages.insert(0, system_message)
-        
-        # Get AI response
+            elif isinstance(msg, dict) and msg.get("role") == "assistant":
+                if "content" in msg:
+                    lc_messages.append(AIMessage(content=msg["content"]))
+                if "tool_calls" in msg:
+                    lc_messages.append(AIMessage(
+                        content="",
+                        additional_kwargs={"tool_calls": msg["tool_calls"]}
+                    ))
+            elif isinstance(msg, ToolMessage):
+                lc_messages.append(msg)
+            elif isinstance(msg, AIMessage):
+                lc_messages.append(msg)
+
+        lc_messages.insert(0, SystemMessage(content=AI_GF_PERSONALITY))
         response = llm_with_tools.invoke(lc_messages)
-        
-        return {"messages": messages + [{"role": "assistant", "content": response.content}]}
-    
-    # Create the graph
+
+        if hasattr(response, "tool_calls") and response.tool_calls:
+            tool_calls = [
+                {
+                    "name": tc["name"],
+                    "args": tc["args"],
+                    "id": tc["id"],
+                    "type": "function"
+                }
+                for tc in response.tool_calls
+            ]
+            return {
+                "messages": messages + [
+                    AIMessage(content="", additional_kwargs={"tool_calls": tool_calls})
+                ]
+            }
+
+        return {
+            "messages": messages + [
+                {"role": "assistant", "content": response.content}
+            ]
+        }
+
+    def should_use_tools(state: ChatState):
+        for msg in reversed(state["messages"]):
+            if isinstance(msg, AIMessage):
+                if msg.additional_kwargs.get("tool_calls"):
+                    return "tools"
+            elif isinstance(msg, dict) and msg.get("role") == "assistant":
+                if msg.get("tool_calls"):
+                    return "tools"
+        return END
+
     workflow = StateGraph(ChatState)
-    
-    # Add nodes
     workflow.add_node("chatbot", chatbot_node)
     workflow.add_node("tools", ToolNode(tools))
-    
-    # Define edges
     workflow.add_edge(START, "chatbot")
-    
-    # Conditional edge for tool use
-    def should_use_tools(state: ChatState):
-        last_message = state["messages"][-1]
-        if hasattr(last_message, "tool_calls") and last_message.tool_calls:
-            return "tools"
-        return END
-    
     workflow.add_conditional_edges("chatbot", should_use_tools)
     workflow.add_edge("tools", "chatbot")
-    
-    # Compile the graph
+
     return workflow.compile()
 
-# Create the graph instance
 graph = create_ai_gf_graph()
