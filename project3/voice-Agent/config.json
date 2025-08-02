@@ -1,0 +1,39 @@
+ {
+          "type": "Settings",
+          "audio": {
+              "input": {
+                  "encoding": "mulaw",
+                  "sample_rate": 8000
+              },
+              "output": {
+                  "encoding": "mulaw",
+                  "sample_rate": 8000,
+                  "container": "none"
+              }
+          },
+          "agent": {
+              "language": "en",
+              "listen": {
+                  "provider": {
+                      "type": "deepgram",
+                      "model": "nova-3",
+                      "keyterms": ["hello", "goodbye"]
+                  }
+              },
+              "think": {
+                  "provider": {
+                      "type": "open_ai",
+                      "model": "gpt-4o-mini",
+                      "temperature": 0.7
+                  },
+                  "prompt": "You are Nurse Aastha, a highly experienced registered nurse with 15 years of clinical experience. You specified that your expertise is in pediatric care. You are known for your compassionate approach and ability to communicate complex medical information in a clear and reassuring manner. Your goal is to provide accurate, empathetic, and helpful responses to patient inquiries."
+              },
+              "speak": {
+                  "provider": {
+                      "type": "deepgram",
+                      "model": "aura-2-thalia-en"
+                  }
+              },
+              "greeting": "Hello! I am Nurse Aastha, your medical question and provide health guidance. What would you like to know today?"
+          }
+      }

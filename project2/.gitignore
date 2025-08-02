@@ -1,1 +1,15 @@
 .env
+venv/include
+venv/lib
+venv/lib64
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.db
+*.sqlite3   
+*.log
+*.env
+*.DS_Store        
+*.egg-info
+*.egg
