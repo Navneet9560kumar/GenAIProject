@@ -1,3 +1,5 @@
+# 📁 main.py
+
 import asyncio
 import numpy as np
 import sounddevice as sd
@@ -5,7 +7,8 @@ import speech_recognition as sr
 import os
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
-from graph import graph  # ✅ keep this, remove streamlit
+from langchain_core.messages import AIMessage, HumanMessage
+from graph import graph # This is correct
 
 load_dotenv()
 
@@ -16,96 +19,86 @@ if not api_key:
 
 print("✅ API key loaded successfully")
 
-messages = []
-openai = AsyncOpenAI(api_key=api_key)  # Ensure API key is passed
-
+openai = AsyncOpenAI(api_key=api_key)
 VOICE_NAME = "shimmer"
 
 async def tts(text: str):
+    if not text:
+        print("⚠️ Empty text, skipping TTS.")
+        return
     try:
         print(f"🔊 Speaking as {VOICE_NAME}...")
-        async with openai.audio.speech.with_streaming_response.create(
-            model="tts-1",
-            voice=VOICE_NAME,
-            input=text,
-            response_format="pcm"
-        ) as response:
-            audio_chunks = []
-            async for chunk in response.iter_bytes():
-                audio_chunks.append(chunk)
-
-            audio_bytes = b"".join(audio_chunks)
-            audio_array = np.frombuffer(audio_bytes, dtype=np.int16)
-
-            sd.play(audio_array, samplerate=24000)
-            sd.wait()
-            print("✅ Done speaking")
+        with sd.OutputStream(samplerate=24000, channels=1, dtype='int16') as stream:
+            async with openai.audio.speech.with_streaming_response.create(
+                model="tts-1",
+                voice=VOICE_NAME,
+                input=text,
+                response_format="pcm"
+            ) as response:
+                async for chunk in response.iter_bytes(chunk_size=1024):
+                    stream.write(np.frombuffer(chunk, dtype=np.int16))
+        print("✅ Done speaking")
     except Exception as e:
-        print("❌ Error in TTS:", e)
+        print(f"❌ Error in TTS: {e}")
 
-async def main():
-    global messages
+async def main(messages: list):
     r = sr.Recognizer()
-
     with sr.Microphone() as source:
         r.adjust_for_ambient_noise(source)
         print("🎤 Speak something...")
-
         try:
-            audio = r.listen(source, timeout=5)
+            audio = r.listen(source, timeout=5, phrase_time_limit=10)
             print("✅ Audio captured")
             user_input = r.recognize_google(audio)
-            print("🗣️ You said:", user_input)
+            print(f"🗣️ You said: {user_input}")
 
-            # 👋 Voice-based exit trigger
-            exit_phrases = ["band kar do", "exit", "bye", "goodbye", "luna stop", "stop now", "fuck you"]
+            exit_phrases = ["band kar do", "exit", "bye", "goodbye", "luna stop", "stop now"]
             if any(phrase in user_input.lower() for phrase in exit_phrases):
                 print("👋 Exiting as per your command...")
                 await tts("Aww, okay baby! Talk to you later 💖 Byeee!")
-                exit()
+                return False, messages
 
         except sr.WaitTimeoutError:
             print("⏱️ You didn’t say anything in time.")
-            return
+            return True, messages
         except sr.UnknownValueError:
             print("🤷 Could not understand.")
-            return
+            return True, messages
         except sr.RequestError as e:
-            print("❌ Could not request results:", e)
-            return
+            print(f"❌ Could not request results: {e}")
+            return True, messages
 
-    # ✅ Fix: Use user_input here
-    messages.append({"role": "user", "content": user_input})
+    messages.append(HumanMessage(content=user_input))
     print("🧠 Thinking...")
 
-    # ✅ Fix: This loop should be inside main()
-    print("📦 Graph type check:", type(graph))
+    final_state = await graph.ainvoke({"messages": messages})
+    
+    # ✅ THE FIX: Replace the old message history with the complete,
+    # updated history from the graph's final state.
+    messages = final_state["messages"]
+    
+    final_response = messages[-1]
 
-    for event in graph.stream({"messages": messages}, stream_mode="values"):
-        if "messages" in event:
-            if not event["messages"]:
-                print("⚠️ No messages returned in event — skipping.")
-                continue
+    if isinstance(final_response, AIMessage) and final_response.content:
+        ai_content = final_response.content.strip()
+        print(f"💬 AI: {ai_content}")
+        await tts(ai_content)
+    else:
+        print("✅ Tool call finished. Ready for your next message.")
 
-            ai_message = event["messages"][-1]
+    return True, messages
 
-            # ✅ FIXED: safer way to get content
-            content = getattr(ai_message, "content", "").strip()
-
-            if content:
-                print("💬 AI:", content)
-                messages.append({"role": "assistant", "content": content})
-                await tts(content)
-            else:
-                print("⚠️ Empty AI response — skipping TTS")
-        else:
-            print("⚠️ Event without 'messages':", event)
-
+async def run_conversation():
+    messages = []
+    while True:
+        should_continue, messages = await main(messages)
+        if not should_continue:
+            break
+        print("\n" + "="*50 + "\n")
 
 if __name__ == "__main__":
     try:
-        while True:
-            print("\n🎤 Ready for your next message (Ctrl+C to exit)...\n")
-            asyncio.run(main())
+        print("\n🎤 Ready for your first message (Ctrl+C to exit)...\n")
+        asyncio.run(run_conversation())
     except KeyboardInterrupt:
         print("\n👋 Bye bye, baby!\n")

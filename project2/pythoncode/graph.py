@@ -1,8 +1,10 @@
-from typing import List, Dict, Any, TypedDict
+# 📁 graph.py
+
+from typing import List, Any, TypedDict
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
 from langchain_openai import ChatOpenAI
 from langchain_core.tools import tool
-from langgraph.graph import StateGraph, START, END
+from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
 import requests
 import os
@@ -44,7 +46,6 @@ def run_command(cmd: str) -> str:
     except Exception as e:
         return f"❌ Oops! Error: {str(e)} 💖"
 
-
 @tool
 def get_weather(city: str) -> str:
     """Get current weather in the specified city."""
@@ -57,7 +58,6 @@ def get_weather(city: str) -> str:
     except Exception as e:
         return f"Error: {str(e)}"
 
-
 class ChatState(TypedDict):
     messages: List[Any]
 
@@ -67,72 +67,48 @@ def create_ai_gf_graph():
         temperature=0.7,
         api_key=os.getenv("OPENAI_API_KEY")
     )
-
     tools = [run_command, get_weather]
     llm_with_tools = llm.bind_tools(tools)
 
+    # ✅ This is the corrected, simpler node.
     def chatbot_node(state: ChatState):
-        messages = state["messages"]
-        lc_messages = []
+        # We add the personality on every turn to keep it in context.
+        # It's more robust than the complex loop.
+        messages_with_personality = state["messages"] + [SystemMessage(content=AI_GF_PERSONALITY)]
+        response = llm_with_tools.invoke(messages_with_personality)
+        
+        # ✅ THE FIX: This line is crucial. It appends the new AI response 
+        # to the history instead of replacing it. This preserves the context
+        # for tool calls and fixes the error.
+        return {"messages": state["messages"] + [response]}
 
-        for msg in messages:
-            if isinstance(msg, dict) and msg.get("role") == "user":
-                lc_messages.append(HumanMessage(content=msg["content"]))
-            elif isinstance(msg, dict) and msg.get("role") == "assistant":
-                if "content" in msg:
-                    lc_messages.append(AIMessage(content=msg["content"]))
-                if "tool_calls" in msg:
-                    lc_messages.append(AIMessage(
-                        content="",
-                        additional_kwargs={"tool_calls": msg["tool_calls"]}
-                    ))
-            elif isinstance(msg, ToolMessage):
-                lc_messages.append(msg)
-            elif isinstance(msg, AIMessage):
-                lc_messages.append(msg)
-
-        lc_messages.insert(0, SystemMessage(content=AI_GF_PERSONALITY))
-        response = llm_with_tools.invoke(lc_messages)
-
-        if hasattr(response, "tool_calls") and response.tool_calls:
-            tool_calls = [
-                {
-                    "name": tc["name"],
-                    "args": tc["args"],
-                    "id": tc["id"],
-                    "type": "function"
-                }
-                for tc in response.tool_calls
-            ]
-            return {
-                "messages": messages + [
-                    AIMessage(content="", additional_kwargs={"tool_calls": tool_calls})
-                ]
-            }
-
-        return {
-            "messages": messages + [
-                {"role": "assistant", "content": response.content}
-            ]
-        }
-
-    def should_use_tools(state: ChatState):
-        for msg in reversed(state["messages"]):
-            if isinstance(msg, AIMessage):
-                if msg.additional_kwargs.get("tool_calls"):
-                    return "tools"
-            elif isinstance(msg, dict) and msg.get("role") == "assistant":
-                if msg.get("tool_calls"):
-                    return "tools"
+    def should_use_tools(state: ChatState) -> str:
+        last_message = state["messages"][-1]
+        # Check if the last message from the AI has a tool call
+        if hasattr(last_message, "tool_calls") and last_message.tool_calls:
+            return "tools"
         return END
 
+    # --- Graph construction ---
     workflow = StateGraph(ChatState)
+    
     workflow.add_node("chatbot", chatbot_node)
     workflow.add_node("tools", ToolNode(tools))
-    workflow.add_edge(START, "chatbot")
-    workflow.add_conditional_edges("chatbot", should_use_tools)
+    
+    workflow.set_entry_point("chatbot")
+    
+    workflow.add_conditional_edges(
+        "chatbot",
+        should_use_tools,
+        {
+            "tools": "tools",
+            END: END
+        }
+    )
+    
     workflow.add_edge("tools", "chatbot")
 
     return workflow.compile()
 
+# This creates the graph object that your main.py file will import and use.
 graph = create_ai_gf_graph()
