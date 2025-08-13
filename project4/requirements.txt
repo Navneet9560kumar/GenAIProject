@@ -1,0 +1,7 @@
+flask[async]
+flask
+flask-core
+python-dotenv
+uvicorn
+livekit-agents[deepgram,openai,cartesia,silero,turn-detector]~=1.0
+livekit-plugins-noise-cancellation~=0.2
